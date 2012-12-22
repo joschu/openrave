@@ -18,7 +18,19 @@ Core
 
 * Fixed bugs in RobotBase::CalculateActiveJacobian (thanks to John Schulman)
 
-* SetUserData now supports a key to allow different modules to store their own uninterrupted user data. KinBody.SetCollisionData, KinBody.SetPhysicsData, KinBody.SetViewerData are deprecated
+* SetUserData now supports a key to allow different modules to store their own uninterrupted user data. KinBody.SetCollisionData, KinBody.SetPhysicsData, KinBody.SetViewerData are deprecated. It can also be called through const pointers.
+
+* Added :meth:`.KinBody.Link.ComputeLocalAABB` to get local AABB of the link.
+
+* Added :meth:`.RaveGetAffineDOFValuesFromVelocity` and :meth:`.RaveGetVelocityFromAffineDOFVelocity` for velocity conversion of affine values.
+
+* Added :meth:`.ConfigurationSpecification.GetSetFn` and :meth:`.ConfigurationSpecification.GetGetFn` for general setting/getting functions of a configuration.
+
+* :meth:`.KinBody.SetDOFVelocities` now accepts indices
+
+* Fixed stale group names in KinBody _spec, Robot _activespec, and IdealController groups; :meth:`.ConfigurationSpecification.FindCompatibleGroup` now more strict.
+
+* Many methods in :class:`.InterfaceBase` have not become multi-thread safe.
 
 Inverse Kinematics
 ------------------
@@ -36,6 +48,8 @@ Misc
 * Fixed :meth:`.planningutils.JitterTransform` and added openravepy wrapper
 
 * Fixed opening DirectX files as environment files
+
+* Fixed destruction order bug in qt/coin viewer.
 
 Version 0.8.2
 =============

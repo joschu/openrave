@@ -166,7 +166,6 @@ protected:
         return PyInterfaceBasePtr();
     }
 
-
     void _ViewerThread(const string &strviewer, bool bShowViewer)
     {
         _pviewer.reset();
@@ -1271,8 +1270,11 @@ object GetUserData(UserDataPtr pdata)
         if( !!pserializable ) {
             return object(PySerializableData(pserializable));
         }
-        else {
+        else if( !!pdata ) {
             return object(PyUserData(pdata));
+        }
+        else {
+            return object();
         }
     }
 }
@@ -1408,6 +1410,7 @@ The **releasegil** parameter controls whether the python Global Interpreter Lock
         .def("SetUserData",setuserdata2,args("data"), DOXY_FN(InterfaceBase,SetUserData))
         .def("SetUserData",setuserdata3,args("key","data"), DOXY_FN(InterfaceBase,SetUserData))
         .def("SetUserData",setuserdata4,args("key", "data"), DOXY_FN(InterfaceBase,SetUserData))
+        .def("RemoveUserData", &PyInterfaceBase::RemoveUserData, DOXY_FN(InterfaceBase, RemoveUserData))
         .def("GetUserData",&PyInterfaceBase::GetUserData, GetUserData_overloads(args("key"), DOXY_FN(InterfaceBase,GetUserData)))
         .def("SendCommand",&PyInterfaceBase::SendCommand,SendCommand_overloads(args("cmd","releasegil"), sSendCommandDoc.c_str()))
         .def("GetReadableInterfaces",&PyInterfaceBase::GetReadableInterfaces,DOXY_FN(InterfaceBase,GetReadableInterfaces))

@@ -23,17 +23,6 @@
 class CollisionCheckerPQP : public CollisionCheckerBase
 {
 public:
-    struct COL
-    {
-        COL(Tri tri1_in, Tri tri2_in){
-            tri1 = tri1_in; tri2 = tri2_in;
-        }
-        Tri tri1;
-        Tri tri2;
-        KinBodyPtr pbody1;
-        KinBodyPtr pbody2;
-    };
-
     class KinBodyInfo : public OpenRAVE::UserData
     {
 public:
@@ -41,7 +30,10 @@ public:
         }
         virtual ~KinBodyInfo() {
         }
-        KinBodyPtr pbody;
+        KinBodyPtr GetBody() const {
+            return _pbody.lock();
+        }
+        KinBodyWeakPtr _pbody;
         vector<boost::shared_ptr<PQP_Model> > vlinks;
         int nLastStamp;
     };
@@ -67,7 +59,7 @@ public:
         vector<KinBodyPtr> vbodies;
         GetEnv()->GetBodies(vbodies);
         FOREACHC(itbody, vbodies) {
-            if( !InitKinBody(*itbody) ) {
+            if( !_InitKinBody(*itbody) ) {
                 RAVELOG_WARN("failed to init kinbody\n");
             }
         }
@@ -86,9 +78,20 @@ public:
 
     virtual bool InitKinBody(KinBodyPtr pbody)
     {
-        KinBodyInfoPtr pinfo(new KinBodyInfo());
+        return _InitKinBody(pbody);
+    }
 
-        pinfo->pbody = pbody;
+    virtual bool _InitKinBody(KinBodyConstPtr pbody)
+    {
+        KinBodyInfoPtr pinfo = boost::dynamic_pointer_cast<KinBodyInfo>(pbody->GetUserData("pqpcollision"));
+        // need the pbody check since kinbodies can be cloned and could have the wrong pointer
+        if( !!pinfo && pinfo->GetBody() == pbody ) {
+            return true;
+        }
+
+        pinfo.reset(new KinBodyInfo());
+
+        pinfo->_pbody = boost::const_pointer_cast<KinBody>(pbody);
         pbody->SetUserData("pqpcollision", pinfo);
 
         PQP_REAL p1[3], p2[3], p3[3];
@@ -111,6 +114,15 @@ public:
         }
 
         return true;
+    }
+
+    void Synchronize()
+    {
+        vector<KinBodyPtr> vbodies;
+        GetEnv()->GetBodies(vbodies);
+        FOREACHC(itbody, vbodies) {
+            _InitKinBody(*itbody);
+        }
     }
 
     virtual void RemoveKinBody(KinBodyPtr pbody)
@@ -194,6 +206,8 @@ public:
         if(!!report) {
             report->Reset(_options);
         }
+        _InitKinBody(plink1->GetParent());
+        _InitKinBody(plink2->GetParent());
         _pactiverobot.reset();
         PQP_REAL R1[3][3], R2[3][3], T1[3], T2[3];
         GetPQPTransformFromTransform(plink1->GetTransform(),R1,T1);
@@ -230,6 +244,8 @@ public:
         int tmpnumwithintol = 0;
         bool retval;
 
+        _InitKinBody(plink->GetParent());
+
         std::vector<KinBodyPtr> vecbodies;
         GetEnv()->GetBodies(vecbodies);
 
@@ -250,6 +266,7 @@ public:
             if( find(vbodyexcluded.begin(),vbodyexcluded.end(),pbody2) != vbodyexcluded.end() ) {
                 continue;
             }
+            _InitKinBody(pbody2);
             std::vector<KinBody::LinkPtr> veclinks2 = pbody2->GetLinks();
             pbody2->GetLinkTransformations(vtrans2);
             GetPQPTransformFromTransform(vtrans1[plink->GetIndex()],R1,T1);
@@ -341,6 +358,7 @@ public:
         if(!!report ) {
             report->Reset(_options);
         }
+        _InitKinBody(pbody);
         int adjacentoptions = KinBody::AO_Enabled;
         if( (_options&OpenRAVE::CO_ActiveDOFs) && pbody->IsRobot() ) {
             adjacentoptions |= KinBody::AO_ActiveDOFs;
@@ -359,7 +377,7 @@ public:
     boost::shared_ptr<PQP_Model> GetLinkModel(KinBody::LinkConstPtr plink)
     {
         KinBodyInfoPtr pinfo = boost::dynamic_pointer_cast<KinBodyInfo>(plink->GetParent()->GetUserData("pqpcollision"));
-        BOOST_ASSERT( pinfo->pbody == plink->GetParent());
+        BOOST_ASSERT( pinfo->GetBody() == plink->GetParent());
         return pinfo->vlinks.at(plink->GetIndex());
     }
 
@@ -382,6 +400,7 @@ private:
 
         std::vector<Transform> vtrans1,vtrans2;
         pbody1->GetLinkTransformations(vtrans1);
+        _InitKinBody(pbody1);
 
         std::vector<KinBody::LinkPtr> veclinks1 = pbody1->GetLinks();
         FOREACH(itbody,vecbodies) {
@@ -398,6 +417,7 @@ private:
                 continue;
             }
 
+            _InitKinBody(pbody2);
             std::vector<KinBody::LinkPtr> veclinks2 = pbody2->GetLinks();
             pbody2->GetLinkTransformations(vtrans2);
             for(int i = 0; i < (int)vtrans1.size(); i++) {
@@ -440,6 +460,8 @@ private:
     // does not check attached
     bool CheckCollisionP(KinBodyConstPtr pbody1, KinBodyConstPtr pbody2, CollisionReportPtr report)
     {
+        _InitKinBody(pbody1);
+        _InitKinBody(pbody2);
         PQP_REAL R1[3][3], R2[3][3], T1[3], T2[3];
         FOREACHC(itlink1,pbody1->GetLinks()) {
             GetPQPTransformFromTransform((*itlink1)->GetTransform(),R1,T1);
@@ -462,6 +484,8 @@ private:
     // does not check attached
     bool CheckCollisionP(KinBody::LinkConstPtr plink, KinBodyConstPtr pbody, CollisionReportPtr report)
     {
+        _InitKinBody(plink->GetParent());
+        _InitKinBody(pbody);
         bool success = false;
         PQP_REAL R1[3][3], R2[3][3], T1[3], T2[3];
         GetPQPTransformFromTransform(plink->GetTransform(),R1,T1);
@@ -630,6 +654,8 @@ private:
         else {
             _pactiverobot.reset();
         }
+        // init just in case
+        _InitKinBody(pbody);
     }
 
     bool _IsActiveLink(KinBodyConstPtr pbody, int linkindex)
@@ -663,7 +689,6 @@ private:
 #ifdef RAVE_REGISTER_BOOST
 #include BOOST_TYPEOF_INCREMENT_REGISTRATION_GROUP()
 BOOST_TYPEOF_REGISTER_TYPE(CollisionCheckerPQP)
-BOOST_TYPEOF_REGISTER_TYPE(CollisionCheckerPQP::COL)
 BOOST_TYPEOF_REGISTER_TYPE(CollisionCheckerPQP::KinBodyInfo)
 BOOST_TYPEOF_REGISTER_TYPE(PQP_Model)
 #endif

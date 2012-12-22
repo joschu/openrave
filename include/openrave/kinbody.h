@@ -364,6 +364,9 @@ protected:
             return _collision;
         }
 
+        /// \brief Compute the aabb of all the geometries of the link in the link coordinate system
+        virtual AABB ComputeLocalAABB() const;
+
         /// \brief Compute the aabb of all the geometries of the link in the world coordinate system
         virtual AABB ComputeAABB() const;
 
@@ -1243,7 +1246,7 @@ private:
         return _name;
     }
 
-    /// \brief Set the name of the robot, notifies the environment and checks for uniqueness.
+    /// \brief Set the name of the body, notifies the environment and checks for uniqueness.
     virtual void SetName(const std::string& name);
 
     /// Methods for accessing basic information about joints
@@ -1457,7 +1460,8 @@ private:
     /// Copies the current velocity of the base link and calls SetDOFVelocities(linearvel,angularvel,vDOFVelocities)
     /// \param[in] dofvelocities - velocities of each of the degrees of freeom
     /// \param[in] checklimits if >0, will excplicitly check the joint velocity limits before setting the values and clamp them. If == 1, then will warn if the limits are overboard, if == 2, then will not warn (used for code that knows it's giving bad values)
-    virtual void SetDOFVelocities(const std::vector<dReal>& dofvelocities, uint32_t checklimits = CLA_CheckLimits);
+    /// \param dofindices the dof indices to return the values for. If empty, will compute for all the dofs
+    virtual void SetDOFVelocities(const std::vector<dReal>& dofvelocities, uint32_t checklimits = CLA_CheckLimits, const std::vector<int>& dofindices = std::vector<int>());
 
     /// \brief Returns the linear and angular velocities for each link
     ///
@@ -1749,7 +1753,7 @@ private:
     /// block the thread that made the parameter change.
     /// \param callback
     /// \param properties a mask of the \ref KinBodyProperty values that the callback should be called for when they change
-    virtual UserDataPtr RegisterChangeCallback(int properties, const boost::function<void()>& callback);
+    virtual UserDataPtr RegisterChangeCallback(int properties, const boost::function<void()>& callback) const;
 
     void Serialize(BaseXMLWriterPtr writer, int options=0) const;
 
@@ -1883,7 +1887,7 @@ protected:
                                      ///< i|(j<<16) will be in the set where i<j.
     std::vector< std::pair<std::string, std::string> > _vForcedAdjacentLinks; ///< internally stores forced adjacent links
     std::list<KinBodyWeakPtr> _listAttachedBodies; ///< list of bodies that are directly attached to this body (can have duplicates)
-    std::list<UserDataWeakPtr> _listRegisteredCallbacks; ///< callbacks to call when particular properties of the body change.
+    mutable std::list<UserDataWeakPtr> _listRegisteredCallbacks; ///< callbacks to call when particular properties of the body change. the registration/deregistration of the list can happen at any point and does not modify the kinbody state exposed to the user, hence it is mutable
 
     mutable boost::array<std::set<int>, 4> _setNonAdjacentLinks; ///< contains cached versions of the non-adjacent links depending on values in AdjacentOptions. Declared as mutable since data is cached.
     mutable int _nNonAdjacentLinkCache; ///< specifies what information is currently valid in the AdjacentOptions.  Declared as mutable since data is cached. If 0x80000000 (ie < 0), then everything needs to be recomputed including _setNonAdjacentLinks[0].

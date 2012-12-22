@@ -24,10 +24,20 @@ namespace ParabolicRamp = ParabolicRampInternal;
 
 class ConstraintParabolicSmoother : public PlannerBase, public ParabolicRamp::FeasibilityCheckerBase, public ParabolicRamp::RandomNumberGeneratorBase
 {
+    struct LinkConstraintInfo
+    {
+        KinBody::LinkPtr plink;
+        AABB ablocal; // local aabb of the link
+    };
+
 public:
     ConstraintParabolicSmoother(EnvironmentBasePtr penv, std::istream& sinput) : PlannerBase(penv)
     {
-        __description = ":Interface Author: Rosen Diankov\n\nInterface to `Indiana University Intelligent Motion Laboratory <http://www.iu.edu/~motion/software.html>`_ parabolic smoothing library (Kris Hauser).\n\n**Note:** The original trajectory will not be preserved at all, don't use this if the robot has to hit all points of the trajectory.\n";
+        __description = ":Interface Author: Rosen Diankov\nConstraint-based smoothing with `Indiana University Intelligent Motion Laboratory <http://www.iu.edu/~motion/software.html>`_ parabolic smoothing library (Kris Hauser).\n\n**Note:** The original trajectory will not be preserved at all, don't use this if the robot has to hit all points of the trajectory.\n";
+        _distancechecker = RaveCreateCollisionChecker(penv, "pqp");
+        OPENRAVE_ASSERT_FORMAT0(!!_distancechecker, "need pqp distance checker", ORE_Assert);
+        _uniformsampler = RaveCreateSpaceSampler(GetEnv(),"mt19937");
+        OPENRAVE_ASSERT_FORMAT0(!!_uniformsampler, "need mt19937 space samplers", ORE_Assert);
     }
 
     virtual bool InitPlan(RobotBasePtr pbase, PlannerParametersConstPtr params)
@@ -53,8 +63,10 @@ public:
         if( _parameters->_nMaxIterations <= 0 ) {
             _parameters->_nMaxIterations = 100;
         }
-        _puniformsampler = RaveCreateSpaceSampler(GetEnv(),"mt19937");
-        return !!_puniformsampler;
+        if( !_distancechecker->InitEnvironment() ) {
+            return false;
+        }
+        return true;
     }
 
     virtual PlannerParametersConstPtr GetParameters() const {
@@ -74,7 +86,6 @@ public:
         }
 
         uint32_t basetime = utils::GetMilliTime();
-        ConstraintTrajectoryTimingParametersConstPtr parameters = boost::dynamic_pointer_cast<ConstraintTrajectoryTimingParameters const>(GetParameters());
 
         vector<ParabolicRamp::Vector> path;
         path.reserve(ptraj->GetNumWaypoints());
@@ -113,15 +124,16 @@ public:
             path.push_back(q);
         }
         try {
-            ParabolicRamp::DynamicPath dynamicpath;
-            dynamicpath.Init(parameters->_vConfigVelocityLimit,parameters->_vConfigAccelerationLimit);
-            dynamicpath._multidofinterp = _parameters->_multidofinterp;
-            dynamicpath.SetJointLimits(parameters->_vConfigLowerLimit,parameters->_vConfigUpperLimit);
-            dynamicpath.SetMilestones(path);   //now the trajectory starts and stops at every milestone
-            RAVELOG_DEBUG(str(boost::format("initial path size=%d, duration=%f, pointtolerance=%f")%path.size()%dynamicpath.GetTotalTime()%parameters->_pointtolerance));
-            ParabolicRamp::Vector tol = parameters->_vConfigResolution;
+            std::list<ParabolicRamp::ParabolicRampND> ramps;
+            SetMilestones(ramps, path);
+            dReal totaltime=0;
+            FOREACH(itramp, ramps) {
+                totaltime += itramp->endTime;
+            }
+            RAVELOG_DEBUG(str(boost::format("initial path size=%d, duration=%f, pointtolerance=%f")%path.size()%totaltime%_parameters->_pointtolerance));
+            ParabolicRamp::Vector tol = _parameters->_vConfigResolution;
             FOREACH(it,tol) {
-                *it *= parameters->_pointtolerance;
+                *it *= _parameters->_pointtolerance;
             }
             ParabolicRamp::RampFeasibilityChecker checker(this,tol);
 
@@ -132,8 +144,10 @@ public:
 
             int numshortcuts=0;
             if( !!_parameters->_setstatefn ) {
-                dynamicpath.Shortcut(parameters->_nMaxIterations,checker,this);
+                Shortcut(ramps, _parameters->_nMaxIterations, checker, this);
             }
+
+            BOOST_ASSERT( ramps.size() > 0 );
 
             progress._iteration=1;
             if( _CallCallbacks(progress) == PA_Interrupt ) {
@@ -160,16 +174,21 @@ public:
             }
             ptraj->Init(newspec);
 
+            totaltime=0;
+            FOREACH(itramp, ramps) {
+                totaltime += itramp->endTime;
+            }
+
             // separate all the acceleration switches into individual points
             vtrajpoints.resize(newspec.GetDOF());
-            ConfigurationSpecification::ConvertData(vtrajpoints.begin(),newspec,dynamicpath.ramps.at(0).x0.begin(),oldspec,1,GetEnv(),true);
-            ConfigurationSpecification::ConvertData(vtrajpoints.begin(),newspec,dynamicpath.ramps.at(0).dx0.begin(),velspec,1,GetEnv(),false);
+            ConfigurationSpecification::ConvertData(vtrajpoints.begin(),newspec,ramps.front().x0.begin(),oldspec,1,GetEnv(),true);
+            ConfigurationSpecification::ConvertData(vtrajpoints.begin(),newspec,ramps.front().dx0.begin(),velspec,1,GetEnv(),false);
             vtrajpoints.at(waypointoffset) = 1;
             vtrajpoints.at(timeoffset) = 0;
             ptraj->Insert(ptraj->GetNumWaypoints(),vtrajpoints);
             vector<dReal> vswitchtimes;
             ParabolicRamp::Vector vconfig;
-            FOREACHC(itrampnd,dynamicpath.ramps) {
+            FOREACHC(itrampnd,ramps) {
                 vswitchtimes.resize(0);
                 vswitchtimes.push_back(itrampnd->endTime);
                 if( _parameters->_outputaccelchanges ) {
@@ -205,8 +224,8 @@ public:
                 ptraj->Insert(ptraj->GetNumWaypoints(),vtrajpoints);
             }
 
-            BOOST_ASSERT(RaveFabs(dynamicpath.GetTotalTime()-ptraj->GetDuration())<0.001);
-            RAVELOG_DEBUG(str(boost::format("after shortcutting %d times: path waypoints=%d, traj waypoints=%d, traj time=%fs")%numshortcuts%dynamicpath.ramps.size()%ptraj->GetNumWaypoints()%dynamicpath.GetTotalTime()));
+            BOOST_ASSERT(RaveFabs(totaltime-ptraj->GetDuration())<0.001);
+            RAVELOG_DEBUG(str(boost::format("after shortcutting %d times: path waypoints=%d, traj waypoints=%d, traj time=%fs")%numshortcuts%ramps.size()%ptraj->GetNumWaypoints()%totaltime));
         }
         catch (const std::exception& ex) {
             stringstream sdesc; sdesc << std::setprecision(std::numeric_limits<dReal>::digits10+1);
@@ -223,6 +242,132 @@ public:
         return PS_HasSolution;
     }
 
+    inline bool SolveMinTimeWithConstraints(const ParabolicRamp::Vector& x0,const ParabolicRamp::Vector& dx0,const ParabolicRamp::Vector& x1,const ParabolicRamp::Vector& dx1, dReal curtime, ParabolicRamp::RampFeasibilityChecker& check, std::list<ParabolicRamp::ParabolicRampND>& rampsout)
+    {
+        __tempramps1d.resize(0);
+        dReal mintime = ParabolicRamp::SolveMinTimeBounded(x0,dx0,x1,dx1, _parameters->_vConfigAccelerationLimit, _parameters->_vConfigVelocityLimit, _parameters->_vConfigLowerLimit, _parameters->_vConfigUpperLimit, __tempramps1d, _parameters->_multidofinterp);
+        if(mintime < 0 || mintime > curtime ) {
+            return false;
+        }
+        rampsout.clear();
+        CombineRamps(__tempramps1d,rampsout);
+        bool feas=true;
+        FOREACH(itramp, rampsout) {
+            if(!check.Check(*itramp)) {
+                feas=false;
+                break;
+            }
+        }
+        return feas;
+    }
+
+    void SetMilestones(std::list<ParabolicRamp::ParabolicRampND>& ramps, const vector<ParabolicRamp::Vector>& x)
+    {
+        ramps.clear();
+        if(x.size()==1) {
+            ramps.push_back(ParabolicRamp::ParabolicRampND());
+            ramps.front().SetConstant(x[0]);
+        }
+        else if( !x.empty() ) {
+            ParabolicRamp::Vector zero(x[0].size(),0.0);
+            for(size_t i=0; i+1<x.size(); i++) {
+                ramps.push_back(ParabolicRamp::ParabolicRampND());
+                ramps.back().x0 = x[i];
+                ramps.back().x1 = x[i+1];
+                ramps.back().dx0 = zero;
+                ramps.back().dx1 = zero;
+                bool res=ramps.back().SolveMinTimeLinear(_parameters->_vConfigAccelerationLimit, _parameters->_vConfigVelocityLimit);
+                PARABOLIC_RAMP_ASSERT(res && ramps.back().IsValid());
+            }
+        }
+    }
+
+    int Shortcut(std::list<ParabolicRamp::ParabolicRampND>& ramps, int numIters,ParabolicRamp::RampFeasibilityChecker& check,ParabolicRamp::RandomNumberGeneratorBase* rng)
+    {
+        int shortcuts = 0;
+        std::vector<dReal> rampStartTime; rampStartTime.resize(ramps.size());
+        dReal endTime=0;
+        int i = 0;
+        FOREACH(itramp, ramps) {
+            rampStartTime[i++] = endTime;
+            endTime += itramp->endTime;
+        }
+        ParabolicRamp::Vector x0,x1,dx0,dx1;
+        std::list<ParabolicRamp::ParabolicRampND> intermediate;
+        std::list<ParabolicRamp::ParabolicRampND>::iterator itramp1, itramp2;
+        for(int iters=0; iters<numIters; iters++) {
+            dReal t1=rng->Rand()*endTime,t2=rng->Rand()*endTime;
+            if( iters == 0 ) {
+                t1 = 0;
+                t2 = endTime;
+            }
+            if(t1 > t2) {
+                std::swap(t1,t2);
+            }
+            int i1 = std::upper_bound(rampStartTime.begin(),rampStartTime.end(),t1)-rampStartTime.begin()-1;
+            int i2 = std::upper_bound(rampStartTime.begin(),rampStartTime.end(),t2)-rampStartTime.begin()-1;
+            if(i1 == i2) {
+                continue;
+            }
+            //same ramp
+            dReal u1 = t1-rampStartTime[i1];
+            dReal u2 = t2-rampStartTime[i2];
+            itramp1 = ramps.begin();
+            advance(itramp1, i1);
+            itramp2 = ramps.begin();
+            advance(itramp2, i2);
+            PARABOLIC_RAMP_ASSERT(u1 >= 0);
+            PARABOLIC_RAMP_ASSERT(u1 <= itramp1->endTime+ParabolicRamp::EpsilonT);
+            PARABOLIC_RAMP_ASSERT(u2 >= 0);
+            PARABOLIC_RAMP_ASSERT(u2 <= itramp2->endTime+ParabolicRamp::EpsilonT);
+            u1 = std::min(u1,itramp1->endTime);
+            u2 = std::min(u2,itramp2->endTime);
+            itramp1->Evaluate(u1,x0);
+            itramp2->Evaluate(u2,x1);
+            itramp1->Derivative(u1,dx0);
+            itramp2->Derivative(u2,dx1);
+            bool res=SolveMinTimeWithConstraints(x0,dx0,x1,dx1,t2-t1, check, intermediate);
+            if(!res) {
+                continue;
+            }
+            //perform shortcut
+            shortcuts++;
+            itramp1->TrimBack(itramp1->endTime-u1);
+            itramp1->x1 = intermediate.front().x0;
+            itramp1->dx1 = intermediate.front().dx0;
+            itramp2->TrimFront(u2);
+            itramp2->x0 = intermediate.back().x1;
+            itramp2->dx0 = intermediate.back().dx1;
+
+            //replace intermediate ramps
+            ++itramp1;
+            ramps.erase(itramp1, itramp2);
+            ramps.splice(itramp2, intermediate);
+
+            if( IS_DEBUGLEVEL(Level_Verbose) ) {
+                //check for consistency
+                itramp1 = ramps.begin();
+                itramp2 = ramps.begin(); ++itramp2;
+                while(itramp2 != ramps.end() ) {
+                    PARABOLIC_RAMP_ASSERT(itramp1->x1 == itramp2->x0);
+                    PARABOLIC_RAMP_ASSERT(itramp1->dx1 == itramp2->dx0);
+                    itramp1=itramp2;
+                    ++itramp2;
+                }
+            }
+
+            //revise the timing
+            rampStartTime.resize(ramps.size());
+            endTime=0;
+            i = 0;
+            FOREACH(itramp, ramps) {
+                rampStartTime[i++] = endTime;
+                endTime += itramp->endTime;
+            }
+        }
+        return shortcuts;
+    }
+
     virtual bool ConfigFeasible(const ParabolicRamp::Vector& a, const ParabolicRamp::Vector& da)
     {
         // have to also test with tolerances!
@@ -236,6 +381,17 @@ public:
             if( !_parameters->_checkpathconstraintsfn(a,a,IT_OpenStart,PlannerBase::ConfigurationListPtr()) ) {
                 return false;
             }
+        }
+        return true;
+    }
+
+    /** \brief return true if all the links in _listCheckLinks satisfy the acceleration and velocity constraints
+
+       |w x (R x_i) + v| <= thresh
+
+     */
+    virtual bool _CheckConstraintLinks() const {
+        FOREACHC(itinfo, _listCheckLinks) {
         }
         return true;
     }
@@ -296,14 +452,22 @@ public:
     virtual ParabolicRamp::Real Rand()
     {
         std::vector<dReal> vsamples;
-        _puniformsampler->SampleSequence(vsamples,1,IT_OpenEnd);
+        _uniformsampler->SampleSequence(vsamples,1,IT_OpenEnd);
         return vsamples.at(0);
     }
 
 protected:
     ConstraintTrajectoryTimingParametersPtr _parameters;
-    SpaceSamplerBasePtr _puniformsampler;
+    SpaceSamplerBasePtr _uniformsampler;
     RobotBasePtr _probot;
+    CollisionCheckerBasePtr _distancechecker;
+    boost::shared_ptr<ConfigurationSpecification::SetConfigurationStateFn> _setstatefn;
+    boost::shared_ptr<ConfigurationSpecification::GetConfigurationStateFn> _getstatefn;
+
+    std::list< LinkConstraintInfo > _listCheckLinks;
+
+private:
+    std::vector<std::vector<ParabolicRamp::ParabolicRamp1D> > __tempramps1d;
 };
 
 
