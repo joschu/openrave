@@ -114,15 +114,14 @@ if( OPT_PYTHON )
       RESULT_VARIABLE _python_failed2)
 
     if( ${_python_failed0} EQUAL 0 AND ${_python_failed1} EQUAL 0 AND ${_python_failed2} EQUAL 0 )
-      if( NOT IS_DIRECTORY "${_python_distpackage}/numpy/core/include" )
-        if( NOT IS_DIRECTORY "${_python_sitepackage}/numpy/core/include" )
-          message(STATUS "cannot find python numpy dir!")
-          set(PYTHON_EXECUTABLE)
-        else()
-          set(PYTHON_INCLUDE_DIRS ${PYTHON_INCLUDE_DIRS} ${_python_sitepackage_arch}/numpy/core/include)
-        endif()
+    
+      find_package(Numpy)
+    
+      if( NOT PYTHON_NUMPY_INCLUDE_DIR )
+        message(STATUS "cannot find python numpy dir!")
+        set(PYTHON_EXECUTABLE)
       else()
-        set(PYTHON_INCLUDE_DIRS ${PYTHON_INCLUDE_DIRS} ${_python_distpackage}/numpy/core/include)
+          set(PYTHON_INCLUDE_DIRS ${PYTHON_INCLUDE_DIRS} ${PYTHON_NUMPY_INCLUDE_DIR})
       endif()
 
       # get the major.minor python version
