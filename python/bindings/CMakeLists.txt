@@ -2,10 +2,12 @@ if( Boost_PYTHON_FOUND AND Boost_THREAD_FOUND )
   if( PYTHONLIBS_FOUND OR PYTHON_LIBRARIES )
     add_definitions(${Boost_CFLAGS})
     set(CMAKE_REQUIRED_INCLUDES ${PYTHON_INCLUDE_DIRS} ${Boost_INCLUDE_DIR} ${REQUIRED_INCLUDES})
-    set(CMAKE_REQUIRED_LIBRARIES ${PYTHON_LIBRARIES} ${Boost_PYTHON_LIBRARY} ${Boost_THREAD_LIBRARY})
+    set(CMAKE_REQUIRED_LIBRARIES ${PYTHON_LIBRARIES} ${Boost_PYTHON_LIBRARY} ${Boost_THREAD_LIBRARY} ${Boost_SYSTEM_LIBRARY})
     set(CMAKE_REQUIRED_FLAGS ${Boost_CFLAGS} "-DCMAKE_BUILD_TYPE:STRING=Release")
 
     # check if all header files can be included
+    include_directories(${PYTHON_INCLUDE_DIRS} ${OPENRAVE_INCLUDE_LOCAL_DIRS} ${OPENRAVE_CORE_INCLUDE_LOCAL_DIRS})
+      
     check_cxx_source_runs("
     #include <Python.h>
     #include <boost/thread/thread.hpp>
@@ -21,10 +23,8 @@ if( Boost_PYTHON_FOUND AND Boost_THREAD_FOUND )
       return 0;
     }"
     HAVE_ALL_PYTHON_HEADERS)
-    # the test fails for me, but the python modules build and run fine
-    if( 1 ) 	
+    if( HAVE_ALL_PYTHON_HEADERS ) 	
       message(STATUS "python and boost-python found")
-      include_directories(${PYTHON_INCLUDE_DIRS} ${OPENRAVE_INCLUDE_LOCAL_DIRS} ${OPENRAVE_CORE_INCLUDE_LOCAL_DIRS})
       
       set(extralibs)
       if( CLOCK_GETTIME_FOUND )
